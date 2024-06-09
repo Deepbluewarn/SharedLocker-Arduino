@@ -7,9 +7,25 @@
 #include <PubSubClient.h>
 #include "WiFiSSLClient.h"
 
+#include <DFRobot_RGBLCD1602.h>
+
+#include <ArduinoJson.h>
+
+// LCD
+DFRobot_RGBLCD1602 lcd(/*RGBAddr*/0x2D ,/*lcdCols*/16,/*lcdRows*/2);  //16 characters and 2 lines of show
+
+// 보관함 정보
+const char *thisBuildingName = "정보공학관";
+const int thisBuildingNumber = 23;
+const int thisFloorNumber = 1;
+const int lockerNumbers[] = { 102 };
+
+// 솔레노이드 핀  HIGH: 열림, LOW: 닫힘
+int solpin = 7;
+
 // WiFi credentials
-const char *ssid = "SSID";
-const char *pass = "PASS";
+const char *ssid = "network";
+const char *pass = "00001234";
 
 // MQTT Broker settings
 const int mqtt_port = 8883;  // MQTT port (TLS)
@@ -17,7 +33,7 @@ const char *mqtt_broker = "r14333b1.ala.eu-central-1.emqxsl.com";  // EMQX broke
 const char *mqtt_topic_req = "sharedLocker-request";     // MQTT topic
 const char *mqtt_topic_res = "sharedLocker-response";
 const char *mqtt_username = "capstone";  // MQTT username for authentication
-const char *mqtt_password = "1234";  // MQTT password for authentication
+const char *mqtt_password = "capstone";  // MQTT password for authentication
 
 // WiFi and MQTT client initialization
 WiFiSSLClient client;
@@ -109,6 +125,7 @@ void connectToMQTT() {
         }
     }
 }
+
 void mqttCallback(char *mqtt_topic, byte *payload, unsigned int length) {
     Serial.print("Message received on mqtt_topic: ");
     Serial.println(mqtt_topic);
@@ -117,8 +134,80 @@ void mqttCallback(char *mqtt_topic, byte *payload, unsigned int length) {
         Serial.print((char) payload[i]);
     }
     Serial.println("\n-----------------------");
-}
 
+  JsonDocument doc;
+  deserializeJson(doc, payload);
+
+  // Deserialize the JSON document
+  DeserializationError error = deserializeJson(doc, payload);
+
+  // Test if parsing succeeds.
+  if (error) {
+    Serial.print(F("deserializeJson() failed: "));
+    Serial.println(error.f_str());
+    return;
+  }
+
+  int success = doc["success"];
+  String message = doc["message"];
+  
+  if (doc["success"] == true) {
+    // String buildingName = doc["value"]["buildingName"];
+    const int buildingNumber = doc["value"]["buildingNumber"];
+    const int floorNumber = doc["value"]["floorNumber"];
+    const int lockerNumber = doc["value"]["lockerNumber"];
+
+    if (!isMatchingLocker(buildingNumber, floorNumber, lockerNumber)) {
+      // 서버의 응답 정보가 현재 보관함과 일치하지 않는 경우
+      Serial.println("invalid locker");
+      lcd.clear();
+      lcd.print("This is not your");
+      lcd.setCursor(0, 1);
+      lcd.print("Locker");
+      delay(5000);
+      lcd.clear();
+      lcd.print("Shared Locker");
+      return;
+    }
+    lcd.clear();
+    lcd.print("Locker ");
+    lcd.print(String(lockerNumber));
+    lcd.setCursor(0, 1);
+    lcd.print("Opened");
+
+    digitalWrite(solpin, HIGH);
+    delay(10000);
+    digitalWrite(solpin, LOW);
+
+    lcd.clear();
+    lcd.print("Shared Locker");
+  } else {
+    Serial.println("failed response");
+    lcd.clear();
+    lcd.print("Invalid QR Code");
+    delay(5000);
+    lcd.clear();
+    lcd.print("Shared Locker");
+  }
+}
+// 보관함 정보가 일치하는지 확인
+bool isMatchingLocker(const int buildingNumber, const int floorNumber, const int lockerNumber) {
+    if (thisBuildingNumber != buildingNumber) {
+        return false;
+    }
+    if (thisFloorNumber != floorNumber) {
+        return false;
+    }
+
+    // lockerNumbers 배열에서 lockerNumber가 존재하는지 확인
+    int size = sizeof(lockerNumbers) / sizeof(lockerNumbers[0]);
+    for (int i = 0; i < size; i++) {
+        if (lockerNumbers[i] == lockerNumber) {
+            return true;
+        }
+    }
+    return false;
+}
 void setup(){
   Serial.begin(9600);
   Serial1.begin(9600);
@@ -130,6 +219,13 @@ void setup(){
   mqtt_client.setCallback(mqttCallback);
   connectToMQTT();
   
+  lcd.init();
+  lcd.clear();
+  // lcd.print(thisLockerNumber);
+  lcd.print("Shared Locker");
+
+  pinMode(solpin, OUTPUT);
+  digitalWrite(solpin, LOW);
 }
 
 void loop(){
@@ -139,14 +235,35 @@ void loop(){
   }
   mqtt_client.loop();
 
-  while (Serial1.available() > 0) {
-    char buffer[100] = {0};
-
+  while (Serial1.available()) {
     String barcode_data = Serial1.readStringUntil('\n');
-    barcode_data.toCharArray(buffer, barcode_data.length());
 
-    Serial.println(barcode_data);
-    
-    mqtt_client.publish(mqtt_topic_req, buffer);
+    int startIndex = 0;
+    int endIndex = 0;
+    int index = 0;
+
+    StaticJsonDocument<256> jsonDoc;
+
+    const char* keys[] = {"key", "buildingNumber", "floor", "lockerNumber"};
+
+    while ((endIndex = barcode_data.indexOf(' ', startIndex)) != -1 && index < 4) {
+    String word = barcode_data.substring(startIndex, endIndex);
+    jsonDoc[keys[index]] = word;
+    startIndex = endIndex + 1;
+    index++;
+  }
+
+    // 마지막 단어 처리
+    if (index < 4) {
+      String lastWord = barcode_data.substring(startIndex, barcode_data.indexOf('\r', startIndex));
+      jsonDoc[keys[index]] = lastWord;
+    }
+
+    char jsonString[256];
+    serializeJson(jsonDoc, jsonString, sizeof(jsonString));
+    Serial.println(jsonString);
+
+    mqtt_client.publish(mqtt_topic_req, jsonString);
+    mqtt_client.subscribe(mqtt_topic_res);
   }
 }
