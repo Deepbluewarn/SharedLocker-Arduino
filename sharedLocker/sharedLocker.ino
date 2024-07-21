@@ -18,22 +18,22 @@ DFRobot_RGBLCD1602 lcd(/*RGBAddr*/0x2D ,/*lcdCols*/16,/*lcdRows*/2);  //16 chara
 const char *thisBuildingName = "정보공학관";
 const int thisBuildingNumber = 23;
 const int thisFloorNumber = 1;
-const int lockerNumbers[] = { 102 };
+const int lockerNumbers[4][2] = { { 101, 7 }, { 102, 8 }, { 103, 9 }, { 104, 10 } };
 
 // 솔레노이드 핀  HIGH: 열림, LOW: 닫힘
 int solpin = 7;
 
 // WiFi credentials
-const char *ssid = "network";
-const char *pass = "00001234";
+const char *ssid = "SSID";
+const char *pass = "PASSWORD";
 
 // MQTT Broker settings
 const int mqtt_port = 8883;  // MQTT port (TLS)
 const char *mqtt_broker = "r14333b1.ala.eu-central-1.emqxsl.com";  // EMQX broker endpoint
 const char *mqtt_topic_req = "sharedLocker-request";     // MQTT topic
 const char *mqtt_topic_res = "sharedLocker-response";
-const char *mqtt_username = "capstone";  // MQTT username for authentication
-const char *mqtt_password = "capstone";  // MQTT password for authentication
+const char *mqtt_username = "USERNAME";  // MQTT username for authentication
+const char *mqtt_password = "PASSWORD";  // MQTT password for authentication
 
 // WiFi and MQTT client initialization
 WiFiSSLClient client;
@@ -127,6 +127,8 @@ void connectToMQTT() {
 }
 
 void mqttCallback(char *mqtt_topic, byte *payload, unsigned int length) {
+  int targetPinNum = 0;
+
     Serial.print("Message received on mqtt_topic: ");
     Serial.println(mqtt_topic);
     Serial.print("Message: ");
@@ -152,7 +154,6 @@ void mqttCallback(char *mqtt_topic, byte *payload, unsigned int length) {
   String message = doc["message"];
   
   if (doc["success"] == true) {
-    // String buildingName = doc["value"]["buildingName"];
     const int buildingNumber = doc["value"]["buildingNumber"];
     const int floorNumber = doc["value"]["floorNumber"];
     const int lockerNumber = doc["value"]["lockerNumber"];
@@ -169,15 +170,18 @@ void mqttCallback(char *mqtt_topic, byte *payload, unsigned int length) {
       lcd.print("Shared Locker");
       return;
     }
+
+    targetPinNum = getLockerPinNum(lockerNumber);
+    
     lcd.clear();
     lcd.print("Locker ");
     lcd.print(String(lockerNumber));
     lcd.setCursor(0, 1);
     lcd.print("Opened");
 
-    digitalWrite(solpin, HIGH);
+    digitalWrite(targetPinNum, HIGH);
     delay(10000);
-    digitalWrite(solpin, LOW);
+    digitalWrite(targetPinNum, LOW);
 
     lcd.clear();
     lcd.print("Shared Locker");
@@ -189,6 +193,24 @@ void mqttCallback(char *mqtt_topic, byte *payload, unsigned int length) {
     lcd.clear();
     lcd.print("Shared Locker");
   }
+}
+
+void initLockerPin() {
+  int size = sizeof(lockerNumbers) / sizeof(lockerNumbers[0]);
+  for (int i = 0; i < size; i++) {
+    Serial.println(lockerNumbers[i][1]);
+    pinMode(lockerNumbers[i][1], OUTPUT);
+  }
+}
+
+int getLockerPinNum(int lockerNumber) {
+  int size = sizeof(lockerNumbers) / sizeof(lockerNumbers[0]);
+    for (int i = 0; i < size; i++) {
+        if (lockerNumbers[i][0] == lockerNumber) {
+          return lockerNumbers[i][1];
+        }
+    }
+    return -1;
 }
 // 보관함 정보가 일치하는지 확인
 bool isMatchingLocker(const int buildingNumber, const int floorNumber, const int lockerNumber) {
@@ -202,7 +224,7 @@ bool isMatchingLocker(const int buildingNumber, const int floorNumber, const int
     // lockerNumbers 배열에서 lockerNumber가 존재하는지 확인
     int size = sizeof(lockerNumbers) / sizeof(lockerNumbers[0]);
     for (int i = 0; i < size; i++) {
-        if (lockerNumbers[i] == lockerNumber) {
+        if (lockerNumbers[i][0] == lockerNumber) {
             return true;
         }
     }
@@ -221,11 +243,9 @@ void setup(){
   
   lcd.init();
   lcd.clear();
-  // lcd.print(thisLockerNumber);
   lcd.print("Shared Locker");
 
-  pinMode(solpin, OUTPUT);
-  digitalWrite(solpin, LOW);
+  initLockerPin();
 }
 
 void loop(){
